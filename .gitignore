@@ -1,0 +1,24 @@
+# Build folders
+bin/
+obj/
+
+# VS / Rider / VS Code stuff
+*.user
+*.suo
+*.sln.ide
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Environment files
+*.env
+
+# Python related (if app.py exists)
+__pycache__/
+*.pyc
+
+# Publish output
+publish/
+

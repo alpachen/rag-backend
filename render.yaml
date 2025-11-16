@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: security-rag-backend
+    runtime: dotnet
+    buildCommand: "dotnet build -c Release"
+    startCommand: "dotnet WebAPI.dll"
+    envVars:
+      - key: ASPNETCORE_URLS
+        value: http://0.0.0.0:10000
+    plan: free
+
