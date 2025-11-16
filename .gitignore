@@ -8,6 +8,9 @@ obj/
 *.sln.ide
 .vscode/
 .idea/
+.vs/
+*.v2
+*.vsidx
 
 # Logs
 *.log
@@ -21,4 +24,7 @@ __pycache__/
 
 # Publish output
 publish/
+
+# Backup files
+*.tmp
 

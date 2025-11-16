@@ -188,5 +188,52 @@ namespace RagPipeline.Services
                 .GetProperty("content")
                 .GetString() ?? "(無回應)";
         }
+
+        // ============================================
+        // 🆕 取得前端需要的 Top 文件來源
+        // ============================================
+        public async Task<List<RagSource>> GetTopSourcesAsync(string query, int topK = 5)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+                return new List<RagSource>();
+
+            // 1) 文字轉 embedding（Voyage）
+            var embedding = await _embedder.EmbedAsync(query);
+
+            // 2) 搜尋向量資料庫（Qdrant）
+            var results = await _indexer.SearchAsync(embedding, topK);
+
+            // 3) 整理成前端可用格式
+            return results.Select(r =>
+            {
+                // Payload = JsonElement
+                string fileName =
+                    r.Payload.TryGetProperty("fileName", out var f)
+                        ? f.GetString() ?? ""
+                        : "unknown";
+
+                string preview =
+                    r.Payload.TryGetProperty("content", out var p)
+                        ? p.GetString()?.Substring(0, Math.Min(120, p.GetString()!.Length)) + "..."
+                        : "(無內容)";
+
+                return new RagSource
+                {
+                    FileName = fileName,
+                    PreviewText = preview,
+                    Score = r.Score
+                };
+            }).ToList();
+        }
+    }
+
+    // ============================================
+    // 🆕 給前端的模型
+    // ============================================
+    public class RagSource
+    {
+        public string FileName { get; set; } = "";
+        public string PreviewText { get; set; } = "";
+        public double Score { get; set; }
     }
 }

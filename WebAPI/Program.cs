@@ -1,15 +1,16 @@
-using Microsoft.AspNetCore.Mvc;
+ï»¿using Microsoft.AspNetCore.Mvc;
 using RagPipeline.Services;
 using RagPipeline.Embeddings;
 using RagPipeline.VectorDb;
 using RagPipeline.Extractors;
 using RagPipeline.Processing;
 using RagDataPipeline.Services;
+using WebAPI.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ============================
-// CORS¡]«eºÝ¤~¯à©I¥s API¡^
+// CORSï¼ˆå‰ç«¯æ‰èƒ½å‘¼å« APIï¼‰
 // ============================
 builder.Services.AddCors(options =>
 {
@@ -20,7 +21,7 @@ builder.Services.AddCors(options =>
 });
 
 // ============================
-// ³]©w¡G¥[¤J Admin Key
+// è¨­å®šï¼šåŠ å…¥ Admin Key
 // ============================
 builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
 builder.Configuration.AddEnvironmentVariables();
@@ -41,6 +42,7 @@ builder.Services.AddSingleton<RagQueryService>();
 var app = builder.Build();
 
 app.UseCors("AllowAll");
+
 // ============================
 // Middleware
 // ============================
@@ -48,7 +50,7 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 // ============================
-// Admin ÅçÃÒ¤èªk
+// Admin é©—è­‰æ–¹æ³•
 // ============================
 bool IsAdmin(HttpRequest req)
 {
@@ -60,18 +62,42 @@ bool IsAdmin(HttpRequest req)
 }
 
 // ============================
-// ¤@¯ë¨Ï¥ÎªÌ¡GRAG ¬d¸ß
+// ä¸€èˆ¬ä½¿ç”¨è€…ï¼šRAG æŸ¥è©¢ï¼ˆå·²åŠ å…¥ sourcesï¼‰
 // ============================
 app.MapPost("/api/rag/query", async (
     [FromBody] RagQueryRequest request,
     RagQueryService ragService) =>
 {
-    var answer = await ragService.AskAsync(request.Question);
-    return Results.Ok(new { answer });
+    try
+    {
+        // AI å›žç­”
+        var answer = await ragService.AskAsync(request.Question);
+
+        // æ–‡ä»¶ç›¸ä¼¼åº¦
+        var docs = await ragService.GetTopSourcesAsync(request.Question);
+
+        var response = new
+        {
+            answer,
+            sources = docs.Select(d => new
+            {
+                title = d.FileName,
+                snippet = d.PreviewText,
+                score = d.Score,
+                // url = $"https://rag-backend-5jm5.onrender.com/storage/{d.FileName}"
+            })
+        };
+
+        return Results.Ok(response);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message);
+    }
 });
 
 // ============================
-// ºÞ²zªÌ¡G¦C¥X©Ò¦³¤å¥ó
+// ç®¡ç†è€…ï¼šåˆ—å‡ºæ‰€æœ‰æ–‡ä»¶
 // ============================
 app.MapGet("/api/admin/files", (HttpRequest req) =>
 {
@@ -88,7 +114,7 @@ app.MapGet("/api/admin/files", (HttpRequest req) =>
 });
 
 // ============================
-// ºÞ²zªÌ¡G¤W¶Ç¤å¥ó + «Ø¥ß¯Á¤Þ
+// ç®¡ç†è€…ï¼šä¸Šå‚³æ–‡ä»¶ + å»ºç«‹ç´¢å¼•
 // ============================
 app.MapPost("/api/admin/upload", async (
     HttpRequest req,
@@ -112,7 +138,7 @@ app.MapPost("/api/admin/upload", async (
 });
 
 // ============================
-// ºÞ²zªÌ¡G§R°£¤å¥ó + ²¾°£ Qdrant ¦V¶q
+// ç®¡ç†è€…ï¼šåˆªé™¤æ–‡ä»¶ + ç§»é™¤ Qdrant å‘é‡
 // ============================
 app.MapDelete("/api/admin/delete/{filename}", async (
     string filename,
@@ -127,7 +153,7 @@ app.MapDelete("/api/admin/delete/{filename}", async (
 });
 
 // ============================
-// ºÞ²zªÌ¡G­««Ø¥þ³¡¯Á¤Þ
+// ç®¡ç†è€…ï¼šé‡å»ºå…¨éƒ¨ç´¢å¼•
 // ============================
 app.MapPost("/api/admin/reindex", async (
     HttpRequest req,
@@ -141,7 +167,7 @@ app.MapPost("/api/admin/reindex", async (
 });
 
 // ============================
-// ºÞ²zªÌ¡G­««Ø³æ¤@¤å¥ó
+// ç®¡ç†è€…ï¼šé‡å»ºå–®ä¸€æ–‡ä»¶
 // ============================
 app.MapPost("/api/admin/reindex-one/{filename}", async (
     string filename,
@@ -156,10 +182,10 @@ app.MapPost("/api/admin/reindex-one/{filename}", async (
 });
 
 // ============================
-app.MapControllers();
-app.Run();
+// ðŸ”¥ Health Checkï¼ˆçµ¦ Render / UptimeRobot ç”¨ï¼‰
+// ============================
+app.MapGet("/", () => Results.Ok(new { status = "alive" }));
 
 // ============================
-// Model
-// ============================
-public record RagQueryRequest(string Question);
+app.MapControllers();
+app.Run();
