@@ -78,6 +78,8 @@ class Program
             Console.WriteLine("🔍 執行嵌入相似度測試...");
             await TestEmbeddingSimilarity(embedder, indexer);
             Console.WriteLine("\n" + new string('=', 50));
+            Console.WriteLine("✅ RAG Chat 已啟動 (支援上下文記憶)");
+            Console.WriteLine(new string('=', 50));
             Console.WriteLine("開始聊天模式...");
             await RunChat(rag);
             return;
@@ -85,7 +87,7 @@ class Program
     }
 
     // =====================================================================
-    // ✅ index：PDF/Excel → chunk → Voyage Embedding → Qdrant upsert
+    // ✅ index：升級版索引邏輯 (支援頁碼、表格結構、類型標記)
     // =====================================================================
     static async Task RunIndexing(
         string folder,
@@ -107,40 +109,83 @@ class Program
 
         foreach (var file in files)
         {
-            Console.WriteLine($"📄 處理：{Path.GetFileName(file)}");
+            string fileName = Path.GetFileName(file);
+            Console.WriteLine($"📄 處理：{fileName}");
 
-            string text = file.EndsWith(".pdf")
-                ? pdf.ExtractText(file)
-                : excel.ExtractText(file);
+            // 1. 準備一個容器來裝「要存入的片段」
+            // 結構：(內容, 類型, 頁碼)
+            var segmentsToIndex = new List<(string Content, string Type, int Page)>();
 
-            if (string.IsNullOrWhiteSpace(text))
+            // ==================================================
+            // 🟥 PDF 處理 (關鍵修改：使用 ExtractSegments)
+            // ==================================================
+            if (file.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("⚠ 無文字可索引，跳過。");
+                // 呼叫我們寫好的聰明萃取器
+                // 它會回傳已經包含「頁碼」和「表格標記」的片段
+                var pdfSegments = pdf.ExtractSegments(file);
+
+                foreach (var seg in pdfSegments)
+                {
+                    // 直接使用萃取器回傳的區塊
+                    // 不再進行二次 Chunk，以免把我們辛苦建立的表格結構或標題切斷
+                    segmentsToIndex.Add((seg.Content, seg.Type, seg.PageNumber));
+                }
+            }
+            // ==================================================
+            // 🟩 Excel 處理 (維持原樣，視為表格)
+            // ==================================================
+            else
+            {
+                string text = excel.ExtractText(file);
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    // Excel 通常內容較密集，還是切一下比較保險
+                    var chunks = chunker.Chunk(text);
+                    foreach (var c in chunks)
+                    {
+                        segmentsToIndex.Add((c, "table", 1)); // Excel 預設頁碼 1
+                    }
+                }
+            }
+
+            if (!segmentsToIndex.Any())
+            {
+                Console.WriteLine("⚠ 無內容可索引，跳過。");
                 continue;
             }
 
-            var chunks = chunker.Chunk(text);
+            // ==================================================
+            // 💾 存入 Qdrant (寫入正確的 Metadata)
+            // ==================================================
             int order = 0;
-
-            foreach (var c in chunks)
+            foreach (var item in segmentsToIndex)
             {
-                // ✅ 使用 Voyage Embedding
-                var vec = await embedder.EmbedAsync(c);
-
+                // 生成向量
+                var vec = await embedder.EmbedAsync(item.Content);
                 var pointId = Guid.NewGuid().ToString();
 
+                // ⚠️ 這裡最重要：把 Page 和 Type 存進去！
                 var payload = new Dictionary<string, object>
                 {
-                    ["file"] = Path.GetFileName(file),
+                    ["file"] = fileName,
+                    ["type"] = item.Type,       // ✅ 存入類型 (pdf_table / pdf_text)
+                    ["page"] = item.Page,       // ✅ 存入頁碼 (解決 Page ? 問題)
                     ["order"] = order,
-                    ["content"] = c
+                    ["content"] = item.Content  // ✅ 這是完整的結構化內容
                 };
 
                 await indexer.UpsertAsync(pointId, vec, payload);
                 order++;
+
+                // (選用) 顯示進度，讓你看到它有在抓表格
+                if (item.Type == "pdf_table")
+                {
+                    // Console.WriteLine($"   🧩 偵測到表格 (Page {item.Page})");
+                }
             }
 
-            Console.WriteLine($"✅ 完成：{Path.GetFileName(file)}");
+            Console.WriteLine($"✅ 完成：{fileName} (共 {order} 個區塊)");
         }
 
         Console.WriteLine("✅ 全部索引完成！");
@@ -151,6 +196,8 @@ class Program
     // =====================================================================
     static async Task RunChat(RagQueryService rag)
     {
+        // 1. 在迴圈外宣告歷史紀錄，確保記憶延續
+        var chatHistory = new List<ChatMessage>();
 
         Console.WriteLine("✅ RAG Chat 已啟動（輸入 exit 離開）");
 
@@ -159,11 +206,54 @@ class Program
             Console.Write("\n你：");
             var q = Console.ReadLine();
 
-            if (q == null || q.Trim().ToLower() == "exit")
+            if (string.IsNullOrWhiteSpace(q) || q.Trim().ToLower() == "exit")
                 break;
 
-            var answer = await rag.AskAsync(q);
-            Console.WriteLine($"\n--- 回答 ---\n{answer}\n");
+            try
+            {
+                // 2. 呼叫 AskAsync
+                // 注意：這裡回傳的是 RagResponse 物件，包含 Answer 和 Sources
+                var response = await rag.AskAsync(q, chatHistory);
+
+                // 3. 顯示主要回答
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"\n--- 回答 ---");
+                Console.ResetColor();
+                Console.WriteLine(response.Answer);
+                Console.WriteLine();
+
+                // 4. 顯示引用來源 (模擬前端的側邊欄功能)
+                if (response.Sources != null && response.Sources.Any())
+                {
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine("📚 參考文件來源 (Reference):");
+                    Console.ResetColor();
+
+                    foreach (var src in response.Sources)
+                    {
+                        Console.WriteLine($"📄 {src.FileName} (Page: {src.Page})");
+
+                        // 製作內容預覽 (去除換行，只取前 60 字，避免洗版)
+                        var preview = src.Content.Replace("\r", "").Replace("\n", " ").Trim();
+                        if (preview.Length > 60) preview = preview.Substring(0, 60) + "...";
+
+                        Console.ForegroundColor = ConsoleColor.DarkGray;
+                        Console.WriteLine($"   📝 \"{preview}\"");
+                        Console.ResetColor();
+                        Console.WriteLine();
+                    }
+                }
+
+                // 5. 更新歷史紀錄 (注意：只存文字 Answer，不需要存 Sources)
+                chatHistory.Add(new ChatMessage { Role = "user", Content = q });
+                chatHistory.Add(new ChatMessage { Role = "assistant", Content = response.Answer });
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"❌ 發生錯誤: {ex.Message}");
+                Console.ResetColor();
+            }
         }
 
         Console.WriteLine("👋 已離開聊天模式。");

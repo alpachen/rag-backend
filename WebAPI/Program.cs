@@ -71,10 +71,10 @@ app.MapPost("/api/rag/query", async (
     try
     {
         // AI 回答
-        var answer = await ragService.AskAsync(request.Question);
+        var answer = await ragService.AskAsync(request.Query);
 
         // 文件相似度
-        var docs = await ragService.GetTopSourcesAsync(request.Question);
+        var docs = await ragService.GetTopSourcesAsync(request.Query);
 
         var response = new
         {

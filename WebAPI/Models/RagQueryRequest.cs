@@ -2,6 +2,6 @@
 {
     public class RagQueryRequest
     {
-        public string Question { get; set; } = "";
+        public string Query { get; set; } = "";
     }
 }
