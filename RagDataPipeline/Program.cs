@@ -217,7 +217,7 @@ class Program
 
                 // 3. 顯示主要回答
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"\n--- 回答 ---");
+                Console.WriteLine($"\n--- 回答 ---\n{response.Answer}\n");
                 Console.ResetColor();
                 Console.WriteLine(response.Answer);
                 Console.WriteLine();
