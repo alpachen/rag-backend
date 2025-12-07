@@ -7,8 +7,7 @@ WORKDIR /src
 # 複製 csproj 以利用 docker layer cache（加速 build）
 COPY WebAPI/WebAPI.csproj WebAPI/
 COPY RagDataPipeline/RagDataPipeline.csproj RagDataPipeline/
-COPY RagPipeline.VectorDb/RagPipeline.VectorDb.csproj RagPipeline.VectorDb/
-COPY RagPipeline.Embeddings/RagPipeline.Embeddings.csproj RagPipeline.Embeddings/
+
 
 # restore（利用 cache → 減少部署時間）
 RUN dotnet restore WebAPI/WebAPI.csproj
