@@ -184,7 +184,8 @@ app.MapPost("/api/admin/reindex-one/{filename}", async (
 // ============================
 // 🔥 Health Check（給 Render / UptimeRobot 用）
 // ============================
-app.MapGet("/", () => Results.Ok(new { status = "alive" }));
+app.MapMethods("/", new[] { "GET", "HEAD" }, () => "Dr.meow SecurityRAG API is running! 🚀");
+
 
 // ============================
 app.MapControllers();
