@@ -222,7 +222,7 @@ class Program
                 Console.WriteLine(response.Answer);
                 Console.WriteLine();
 
-                // 4. 顯示引用來源 (模擬前端的側邊欄功能)
+                // 4. 顯示引用來源 (模擬前端的側邊欄功能 - 多頁版)
                 if (response.Sources != null && response.Sources.Any())
                 {
                     Console.ForegroundColor = ConsoleColor.Cyan;
@@ -231,18 +231,29 @@ class Program
 
                     foreach (var src in response.Sources)
                     {
-                        Console.WriteLine($"📄 {src.FileName} (Page: {src.Page})");
+                        Console.WriteLine($"📄 {src.FileName}（共 {src.Pages.Count} 頁）");
 
-                        // 製作內容預覽 (去除換行，只取前 60 字，避免洗版)
-                        var preview = src.Content.Replace("\r", "").Replace("\n", " ").Trim();
-                        if (preview.Length > 60) preview = preview.Substring(0, 60) + "...";
+                        // 逐頁顯示內容（每頁取前 60 字 Prevent 洗版）
+                        foreach (var page in src.Pages)
+                        {
+                            var content = src.PageContents.ContainsKey(page)
+                                ? src.PageContents[page]
+                                : "(無內容)";
 
-                        Console.ForegroundColor = ConsoleColor.DarkGray;
-                        Console.WriteLine($"   📝 \"{preview}\"");
-                        Console.ResetColor();
+                            // 內容預覽
+                            var preview = content.Replace("\r", "").Replace("\n", " ").Trim();
+                            if (preview.Length > 60)
+                                preview = preview.Substring(0, 60) + "...";
+
+                            Console.ForegroundColor = ConsoleColor.DarkGray;
+                            Console.WriteLine($"   📄 Page {page}: \"{preview}\"");
+                            Console.ResetColor();
+                        }
+
                         Console.WriteLine();
                     }
                 }
+
 
                 // 5. 更新歷史紀錄 (注意：只存文字 Answer，不需要存 Sources)
                 chatHistory.Add(new ChatMessage { Role = "user", Content = q });

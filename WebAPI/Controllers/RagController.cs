@@ -45,10 +45,11 @@ namespace WebAPI.Controllers
                     Sources = result.Sources.Select(s => new WebAPI.Models.RagSourceDoc
                     {
                         FileName = s.FileName,
-                        Page = s.Page,
-                        Content = s.Content,
+                        Pages = s.Pages,
+                        PageContents = s.PageContents,
                         Score = s.Score
                     }).ToList()
+
                 };
 
                 return Ok(response);

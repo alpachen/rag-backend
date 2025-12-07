@@ -22,9 +22,9 @@ namespace RagPipeline.Services
 
     public class RagSourceDoc
     {
-        public string FileName { get; set; } = "";
-        public string Page { get; set; } = "";
-        public string Content { get; set; } = "";
+        public string FileName { get; set; }
+        public List<string> Pages { get; set; } = new();
+        public Dictionary<string, string> PageContents { get; set; } = new();
         public double Score { get; set; }
     }
     public class ChatMessage
@@ -201,17 +201,39 @@ namespace RagPipeline.Services
             // ============================================================
             // 6. 打包結果
             // ============================================================
+            var grouped = ranked
+                .GroupBy(r => r.Payload.TryGetProperty("file", out var f) ? f.ToString() : "unknown")
+                .Select(g =>
+                {
+                    var fileName = g.Key;
+
+                    // 收集所有頁碼
+                    var pages = g.Select(r =>
+                        r.Payload.TryGetProperty("page", out var p) ? p.ToString() : "?"
+                    ).ToList();
+
+                    // 收集 page → content 對應
+                    var dict = g.ToDictionary(
+                        r => r.Payload.TryGetProperty("page", out var p) ? p.ToString() : "?",
+                        r => r.Payload.TryGetProperty("content", out var c) ? c.ToString() ?? "" : ""
+                    );
+
+                    return new RagSourceDoc
+                    {
+                        FileName = fileName,
+                        Pages = pages,
+                        PageContents = dict,
+                        Score = g.Max(x => x.Score)
+                    };
+                })
+                .ToList();
+
             return new RagResponse
             {
                 Answer = answer,
-                Sources = ranked.Select(r => new RagSourceDoc
-                {
-                    FileName = r.Payload.TryGetProperty("file", out var f) ? f.ToString() : "unknown",
-                    Page = r.Payload.TryGetProperty("page", out var p) ? p.ToString() : "?",
-                    Content = r.Payload.TryGetProperty("content", out var c) ? (c.ToString() ?? "") : "",
-                    Score = r.Score
-                }).ToList()
+                Sources = grouped
             };
+
         }
 
         // ============================================================

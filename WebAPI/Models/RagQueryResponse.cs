@@ -8,9 +8,10 @@
 
     public class RagSourceDoc
     {
-        public string FileName { get; set; } = "";
-        public string Page { get; set; } = "";
-        public string Content { get; set; } = "";
+        public string FileName { get; set; }
+        public List<string> Pages { get; set; } = new();
+        public Dictionary<string, string> PageContents { get; set; } = new();
         public double Score { get; set; }
     }
+
 }
