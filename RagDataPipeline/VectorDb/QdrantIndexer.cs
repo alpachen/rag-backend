@@ -14,10 +14,40 @@ namespace RagPipeline.VectorDb
         private const string CollectionName = "security_docs_rag";
         private const int VectorSize = 1024;
 
-        public QdrantIndexer(string endpoint = "http://localhost:6333")
+        // ✅ 修改建構子：從環境變數讀取 Host 和 Key
+        public QdrantIndexer()
         {
-            _endpoint = endpoint.TrimEnd('/');
-            _http = new HttpClient { BaseAddress = new Uri(_endpoint) };
+            // 1. 嘗試讀取環境變數
+            var host = Environment.GetEnvironmentVariable("QDRANT_ENDPOINT");
+            var apiKey = Environment.GetEnvironmentVariable("QDRANT_API_KEY");
+
+            // 2. 判斷連線目標
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                // 沒設定 -> 預設連 Local Docker
+                _endpoint = "http://localhost:6333";
+                Console.WriteLine("⚠️ 未設定 QDRANT_ENDPOINT，使用預設 localhost:6333");
+            }
+            else
+            {
+                // 有設定 -> 連 Qdrant Cloud (或自架遠端)
+                _endpoint = host.TrimEnd('/'); // 移除結尾斜線
+                Console.WriteLine($"🌍 Qdrant 連線目標: {_endpoint}");
+            }
+
+            // 3. 初始化 HttpClient
+            _http = new HttpClient
+            {
+                BaseAddress = new Uri(_endpoint),
+                Timeout = TimeSpan.FromSeconds(60) // 設定超時，避免網路慢時卡死
+            };
+
+            // 4. 關鍵：如果有 Key，一定要加入 Header
+            if (!string.IsNullOrWhiteSpace(apiKey))
+            {
+                _http.DefaultRequestHeaders.Add("api-key", apiKey);
+                Console.WriteLine("🔑 已載入 Qdrant API Key");
+            }
         }
 
         // =====================================================
@@ -152,12 +182,12 @@ namespace RagPipeline.VectorDb
 
             var json = await res.Content.ReadAsStringAsync();
 
-            // 🆕 添加調試日誌
-            Console.WriteLine($"🔍 Qdrant 搜索回應 JSON 長度: {json.Length}");
-            if (json.Length < 500)
-            {
-                Console.WriteLine($"🔍 Qdrant 回應內容: {json}");
-            }
+            //// 🆕 添加調試日誌
+            //Console.WriteLine($"🔍 Qdrant 搜索回應 JSON 長度: {json.Length}");
+            //if (json.Length < 500)
+            //{
+            //    Console.WriteLine($"🔍 Qdrant 回應內容: {json}");
+            //}
 
             var result = JsonSerializer.Deserialize<QdrantSearchResponse>(
                 json,
