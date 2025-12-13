@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using WebAPI.Models;
 using RagPipeline.Services; // 引用你的 RAG 服務 namespace
+using RagPipeline.Models;
 
 namespace WebAPI.Controllers
 {
@@ -57,6 +58,27 @@ namespace WebAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, $"Internal Server Error: {ex.Message}");
+            }
+        }
+
+        // 新增這個 POST 方法
+        [HttpPost("analyze-change")] // API 路徑: POST api/rag/analyze-change
+        public async Task<IActionResult> AnalyzeChange([FromBody] AnalyzeRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Content))
+            {
+                return BadRequest("Content cannot be empty.");
+            }
+
+            try
+            {
+                // 呼叫剛剛寫好的 Service 方法
+                var result = await _ragService.AnalyzeChangeRequestAsync(request.Content);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Analysis Error: {ex.Message}");
             }
         }
     }

@@ -9,6 +9,9 @@ using RagPipeline.VectorDb;
 using OpenAI;
 using OpenAI.Chat;
 using System.ClientModel;
+using RagPipeline.Models;
+using System.Text.RegularExpressions;
+
 
 
 
@@ -32,6 +35,15 @@ namespace RagPipeline.Services
         public string Role { get; set; } = "user";
         public string Content { get; set; } = "";
     }
+
+    public class RagCitation
+    {
+        public int SourceId { get; set; }      // 1,2,3...
+        public string FileName { get; set; }   // ISMS-xxx.pdf
+        public int Page { get; set; }          // 頁碼
+        public string Content { get; set; }    // chunk 內容
+    }
+
     public class RagQueryService
     {
         private readonly VoyageEmbedder _embedder;   // ✅ Voyage embedder
@@ -50,6 +62,7 @@ namespace RagPipeline.Services
             { "資安", new[] { "資訊安全", "ISMS", "安全事件" } },
             { "權責", new[] { "負責人", "誰做", "單位" } }
         };
+
 
 
         public RagQueryService(VoyageEmbedder embedder, QdrantIndexer indexer)
@@ -299,6 +312,311 @@ namespace RagPipeline.Services
             }
 
             return sb.ToString().Trim();
+        }
+
+        // ============================================================
+        // 📌 RAG 輔助函式：檢索 ISMS 文件（結構化 Citation 版本）
+        // ============================================================
+        private async Task<List<RagCitation>> RetrieveIsmsContext(string userDescription)
+        {
+            const int TOP_K = 4;
+
+            var citations = new List<RagCitation>();
+
+            // 1. 使用者描述轉 Embedding
+            var embedding = await _embedder.EmbedAsync(userDescription);
+
+            // 2. 查詢 Qdrant
+            var results = await _indexer.SearchAsync(embedding, TOP_K);
+
+            if (!results.Any())
+            {
+                return citations; // 回傳空清單，由上層決定怎麼處理
+            }
+
+            int sourceId = 1;
+
+            foreach (var r in results)
+            {
+                // ---------- file ----------
+                string file = "RAG_SOURCE_MISSING";
+
+                if (r.Payload.TryGetProperty("file", out var fElement))
+                {
+                    file = fElement.GetString() ?? file;
+                }
+
+                if (string.IsNullOrWhiteSpace(file) || file == "RAG_SOURCE_MISSING")
+                {
+                    file = $"Qdrant-ID-{r.Id.ToString()?.Substring(0, 6)}";
+                }
+
+                // ---------- page ----------
+                string pageStr = r.Payload.TryGetProperty("page", out var p)
+                    ? p.ToString() // Qdrant 讀出的值 (可能是字串或數字的 JsonElement)
+                    : "0";
+
+                int pageNum = 0; // 預設頁碼為 0 (如果轉換失敗)
+
+                // 🚨 核心修正：嘗試將 pageStr 安全地轉換為 int
+                if (int.TryParse(pageStr, out int parsedNum))
+                {
+                    pageNum = parsedNum;
+                }
+                // 處理 Qdrant 可能回傳的帶引號的字串 (例如："5")
+                else if (int.TryParse(pageStr.Trim('"'), out int parsedNumTrimmed))
+                {
+                    pageNum = parsedNumTrimmed;
+                }
+
+                // ---------- content ----------
+                string content = r.Payload.TryGetProperty("content", out var c)
+                    ? c.GetString() ?? ""
+                    : "";
+
+                citations.Add(new RagCitation
+                {
+                    SourceId = sourceId++,
+                    FileName = file,
+                    Page = pageNum,
+                    Content = content.Trim()
+                });
+            }
+
+            return citations;
+        }
+
+        private string BuildCitationContext(List<RagCitation> citations)
+        {
+            if (citations == null || !citations.Any())
+            {
+                return "【ISMS 參考資料】\n（查無相關條文）";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("【ISMS 參考資料（可引用清單）】\n");
+
+            foreach (var c in citations)
+            {
+                sb.AppendLine(
+                    $"[來源 {c.SourceId} - {c.FileName} 頁碼 {c.Page}]\n{c.Content}\n");
+            }
+
+            return sb.ToString().Trim();
+        }
+
+
+
+        // ============================================================
+        // 📌 新增：風險/依賴描述函式 (從您提供的圖片中擷取文字)
+        // ============================================================
+
+        private string GetSystemCategoryDescription()
+        {
+            return @"
+HIS: 涉及掛號、病歷、醫囑等臨床核心系統。
+Infra: 涉及伺服器、網路、防火牆、虛擬機 (VM) 等基礎建設。
+EIP: 涉及行政、企業入口網等非臨床支援系統。
+Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其他類別。
+";
+        }
+
+        private string GetChangeTypeDescription()
+        {
+            return @"
+標準/獨立: 預先核准且風險低，不影響服務的變更。
+緊急: 必須立即實施，以應對重大故障或資安威脅。
+例行: 定期執行的維護、補丁或升級作業。
+復原: 系統故障或變更失敗後的回滾或恢復作業。
+";
+        }
+
+        private string GetDependencyDescription()
+        {
+            // 圖片 image_9f9157.png 內容
+            return @"
+單一元件依賴: 僅影響單一模組，無其他關鍵系統相依。
+有限相依: 有部分系統或部門需同步，但範圍可控。
+高度相依: 牽涉多個關鍵系統 (HIS, LIS, PACS, 排程系統等)，錯誤會連鎖影響。
+外部依賴: 依賴健保署、第三方雲端或外部介接，無法完全控制。
+";
+        }
+
+        private string GetImpactLevelDescription()
+        {
+            // 圖片 image_9f8dba.png 內容
+            return @"
+低: 僅影響單一部門或少數使用者，無關鍵作業。
+中: 跨部門或多系統，造成效率下降但可暫時以人工或替代流程維持。
+高: 影響核心臨床或病人服務，會中斷主要醫療作業。
+重大: 病人安全、法規遵循、院級財務或聲譽風險。
+";
+        }
+
+        private string GetSeverityDescription()
+        {
+            // 圖片 image_9f8d7d.png 內容
+            return @"
+低風險: 單一系統、單一部門；影響可在短時間內回復；無病人安全與法規風險。
+中風險: 跨部門或多系統；若失敗會造成中度作業影響，但有既定回復方案；合規與安全風險低。
+高風險: 涉及關鍵核心系統；潛在影響醫療服務或大量使用者；回復複雜，需較長時間或專業資源；有潛在合規或安全疑慮。
+重大風險: 涉及病人安全、法規遵循、全院級關鍵作業；失敗無即時回復，會造成嚴重醫療或財務後果。
+";
+        }
+
+        // ============================================================
+        // 🚀 AI 自動填單分析 (Analyze Change Request)
+        // ============================================================
+        public async Task<ChangeRequestAnalysisResult> AnalyzeChangeRequestAsync(string userDescription)
+        {
+            // ============================================================
+            // 1️ RAG 檢索（結構化 Citation）
+            // ============================================================
+            List<RagCitation> citations;
+
+            try
+            {
+                citations = await RetrieveIsmsContext(userDescription);
+            }
+            catch (Exception ex)
+            {
+                citations = new List<RagCitation>
+        {
+            new RagCitation
+            {
+                SourceId = 1,
+                FileName = "RAG_ERROR",
+                Page = 0,
+                Content = $"RAG 檢索失敗：{ex.Message}"
+            }
+        };
+            }
+
+            // 👉 關鍵修正：轉成「可被 LLM 引用的文字區塊」
+            string ragContext = BuildCitationContext(citations);
+
+            // 2. 定義 System Prompt (加入 RAG 內容與引用要求)
+            var systemPrompt = $@"
+你是一名資安變更管理的 AI 顧問。
+你的任務是根據使用者提供的『變更內容描述』以及下方提供的 **[ISMS 參考資料]**，進行分析，並輸出結構化的巢狀 JSON。
+
+========================
+【ISMS 參考資料】
+（僅此區塊內的內容可被引用）
+========================
+{ragContext}
+========================
+
+### 🚨 核心限制與引用規則（請嚴格遵守）：
+1. **僅使用限定詞彙**  
+   所有 `value` 欄位，必須從下方「限定詞彙清單」中選擇，不得自行創造詞彙。
+
+2. **引用規則（極度重要）**  
+   - `reasoning` 與 `summaryReasoning` 中：
+     - **只能引用上述 [ISMS 參考資料] 區塊中實際出現的來源標頭**
+     - 來源格式必須完全照抄，例如：  
+       `[來源 1 - ISMS-變更管理程序.pdf 頁碼 12]`
+   - **禁止自行生成、猜測、補寫任何來源**
+   - 若無合適條文可引用，請明確寫：  
+     `無適用 ISMS 條文可引用`
+
+3. **輸出格式**  
+   - 必須輸出一個 JSON 物件
+   - 所有屬性名稱必須使用 camelCase
+   - 不得輸出 JSON 以外的任何說明文字
+
+4. **強制附帶描述**  
+   - 每個欄位的 `description`，必須從下方表格中的合規描述選取
+   - 不得自行改寫描述內容
+
+5. **防幻覺機制（必須遵守）**  
+   - 🚫 絕對禁止出現下列字樣：
+     - 「文件編號」
+     - 未出現在 ISMS 參考資料中的 ISMS 條號
+   - 若無來源，請誠實標註「無適用 ISMS 條文可引用」
+
+### 欄位定義與限定詞彙清單：
+（以下表格內容維持不變）
+
+| 欄位 (Key) | 限定詞彙 (Value) | Description (合規描述) |
+| :--- | :--- | :--- |
+| systemCategory | HIS, Infra, EIP, Other | {GetSystemCategoryDescription()} |
+| ticketCategory | DevOps, IGMS | DevOps: 程式碼部署/版更；IGMS: 資安設定/維護、補丁。 |
+| changeType | 標準/獨立, 緊急, 例行, 復原 | {GetChangeTypeDescription()} |
+| dependency | 單一元件依賴, 有限相依, 高度相依, 外部依賴 | {GetDependencyDescription()} |
+| impactLevel | 低, 中, 高, 重大 | {GetImpactLevelDescription()} |
+| severity | 低風險, 中風險, 高風險, 重大風險 | {GetSeverityDescription()} |
+| testPlan | 完整測試, 部分測試, 無測試 | 完整測試: 含單元、整合、業務流程模擬；部分測試: 僅驗證主要功能；無測試: 直接上線。 |
+| recoveryPlan | 快速回復, 有限回復, 無回復方案 | 快速回復: 有明確步驟，且回復時間短(15分鐘內可恢復)；有限回復: 需長時間或大量人工處理；無回復方案: 一旦失敗無法復原。 |
+
+### 輸出 JSON 結構（AnalysisField 巢狀）：
+```json
+{{
+  ""systemCategory"": {{
+    ""value"": ""限定詞彙"",
+    ""description"": ""合規描述"",
+    ""reasoning"": ""判斷理由，並引用 [來源 X - 檔名 頁碼] 或標示無可引用條文"",
+    ""detail"": """"
+  }},
+  ""ticketCategory"": {{ }},
+  ""changeType"": {{ }},
+  ""severity"": {{ }},
+  ""impactLevel"": {{ }},
+  ""dependency"": {{ }},
+  ""testPlan"": {{ }},
+  ""recoveryPlan"": {{ }},
+  ""summaryReasoning"": ""整體風險與合規性總結，僅可引用上述 ISMS 參考資料中的來源""
+}}
+";
+
+            // 2. 準備訊息
+            var messages = new List<OpenAI.Chat.ChatMessage>
+            {
+                new SystemChatMessage(systemPrompt),
+                new UserChatMessage($"請分析這段描述，並輸出巢狀 JSON：{userDescription}")
+            };
+
+            try
+            {
+                // 3. 呼叫 GPT-4o (強制 JSON 模式)
+                ClientResult<ChatCompletion> result = await _chatClient.CompleteChatAsync(messages, new ChatCompletionOptions
+                {
+                    Temperature = 0.2f, // 低隨機性，求準確
+                    ResponseFormat = ChatResponseFormat.CreateJsonObjectFormat() // 🔥 關鍵：強制回傳 JSON
+                });
+
+                string rawResponse = result.Value.Content[0].Text;
+
+                // 5. 提取純 JSON
+                var match = Regex.Match(rawResponse, @"\{[\s\S]*\}");
+                string jsonResponse = match.Success ? match.Value : rawResponse;
+
+                // 6. 反序列化
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var analysisResult = JsonSerializer.Deserialize<ChangeRequestAnalysisResult>(jsonResponse, options);
+
+                analysisResult.RawJson = jsonResponse;
+
+                // 7. 預防空值崩潰
+                if (analysisResult == null)
+                {
+                    throw new JsonException("LLM 輸出無法解析為預期的巢狀結構。");
+                }
+
+                // 8. 關鍵：確保 SummaryReasoning 不為空
+                analysisResult.SummaryReasoning ??= "AI 成功分析，請檢查各欄位。";
+
+                return analysisResult;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Analysis Failed: {ex.Message}");
+                // 發生錯誤時返回一個帶有錯誤訊息的物件
+                return new ChangeRequestAnalysisResult
+                {
+                    SummaryReasoning = $"AI 分析服務失敗：{ex.Message}"
+                };
+            }
         }
 
         // ============================================================
