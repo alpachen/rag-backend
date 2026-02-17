@@ -52,7 +52,7 @@ namespace RagPipeline.Services
         //private readonly string _groqModel = "llama-3.3-70b-versatile";
         private readonly AzureOpenAIClient _azureClient; // 👈 舊版是 OpenAIClient
         private readonly ChatClient _chatClient;
-        private readonly string _azureDeploymentName = "gpt-4o";
+        private readonly string _azureDeploymentName = "gpt-5.2-chat";
         private readonly string _apiVersion = "2024-08-01-preview"; // Azure API 版本
 
         private readonly Dictionary<string, string[]> _synonymMap = new()
