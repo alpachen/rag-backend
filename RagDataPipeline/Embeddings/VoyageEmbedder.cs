@@ -18,7 +18,7 @@ namespace RagPipeline.Embeddings
             _client = new HttpClient
             {
                 BaseAddress = new Uri("https://api.voyageai.com"),
-                Timeout = TimeSpan.FromSeconds(60)
+                Timeout = TimeSpan.FromMinutes(5)
             };
 
             _client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");

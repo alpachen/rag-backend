@@ -835,7 +835,7 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
             catch (Exception ex)
             {
                 Console.WriteLine($"Azure OpenAI Error: {ex.Message}");
-                return "抱歉，AI 服務暫時無法回應。";
+                return $"AI 錯誤詳情: {ex.Message}";
             }
         }
 
