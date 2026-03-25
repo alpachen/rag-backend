@@ -53,7 +53,7 @@ namespace RagPipeline.Services
         private readonly AzureOpenAIClient _azureClient; // 👈 舊版是 OpenAIClient
         private readonly ChatClient _chatClient;
         private readonly string _azureDeploymentName = "gpt-5.2-chat";
-        private readonly string _apiVersion = "2024-08-01-preview"; // Azure API 版本
+        private readonly string _apiVersion = "2024-10-21"; // Azure API 版本
 
         private readonly Dictionary<string, string[]> _synonymMap = new()
         {
@@ -70,17 +70,22 @@ namespace RagPipeline.Services
             _embedder = embedder;
             _indexer = indexer;
 
-            string azureEndpoint = "https://aoai-skmh-eastus2-dev-01.openai.azure.com/";
+            string azureEndpoint = "https://public-aoai-ai-dev-eastus2-01.openai.azure.com";
             string? azureApiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY");
+            
 
             if (string.IsNullOrWhiteSpace(azureApiKey))
                 throw new Exception("環境變數 AZURE_OPENAI_API_KEY 未設定。");
 
+            // 建立 options 物件
+            AzureOpenAIClientOptions options = new AzureOpenAIClientOptions();
+
             // ✅ 使用 Azure 官方 OpenAIClient (不能加 Timeout / Headers)
             _azureClient = new AzureOpenAIClient(
                 new Uri(azureEndpoint),
-                new AzureKeyCredential(azureApiKey!) // 👈 加上 ! 解決 nullable 警告
-            );
+                new AzureKeyCredential(azureApiKey!),
+                options// 👈 加上 ! 解決 nullable 警告
+            ); 
 
             // 🔥 關鍵：取得 ChatClient
             _chatClient = _azureClient.GetChatClient(_azureDeploymentName);
@@ -611,10 +616,12 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
             catch (Exception ex)
             {
                 Console.WriteLine($"Analysis Failed: {ex.Message}");
-                // 發生錯誤時返回一個帶有錯誤訊息的物件
+                // 💡 即使失敗，也給前端一個可以顯示的結構
                 return new ChangeRequestAnalysisResult
                 {
-                    SummaryReasoning = $"AI 分析服務失敗：{ex.Message}"
+                    SummaryReasoning = $"⚠️ AI 顧問目前離線：{ex.Message}",
+                    SystemCategory = new AnalysisField { Value = "Other", Reasoning = "連線失敗，請手動選擇" },
+                    Severity = new AnalysisField { Value = "中風險", Reasoning = "建議先以中風險處理" }
                 };
             }
         }
@@ -825,7 +832,7 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
                 ClientResult<ChatCompletion> result = await _chatClient.CompleteChatAsync(messages, new ChatCompletionOptions
                 {
                     Temperature = 0.1f,
-                    MaxOutputTokenCount = 2048 // v2.0 正確屬性名稱
+                    MaxOutputTokenCount = 4096 // v2.0 正確屬性名稱
                 });
                 ChatCompletion completion = result.Value;
 
