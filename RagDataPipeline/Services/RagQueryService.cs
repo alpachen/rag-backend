@@ -52,7 +52,7 @@ namespace RagPipeline.Services
         //private readonly string _groqModel = "llama-3.3-70b-versatile";
         private readonly AzureOpenAIClient _azureClient; // 👈 舊版是 OpenAIClient
         private readonly ChatClient _chatClient;
-        private readonly string _azureDeploymentName = "gpt-5.2-chat";
+        private readonly string _azureDeploymentName = "gpt-5.2-Chat";
         private readonly string _apiVersion = "2024-10-21"; // Azure API 版本
 
         private readonly Dictionary<string, string[]> _synonymMap = new()
@@ -73,6 +73,7 @@ namespace RagPipeline.Services
             string azureEndpoint = "https://public-aoai-ai-dev-eastus2-01.openai.azure.com";
             string? azureApiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY");
             
+
 
             if (string.IsNullOrWhiteSpace(azureApiKey))
                 throw new Exception("環境變數 AZURE_OPENAI_API_KEY 未設定。");
@@ -586,7 +587,7 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
                 // 3. 呼叫 GPT-4o (強制 JSON 模式)
                 ClientResult<ChatCompletion> result = await _chatClient.CompleteChatAsync(messages, new ChatCompletionOptions
                 {
-                    Temperature = 0.2f, // 低隨機性，求準確
+                    //Temperature = 0.2f, // 低隨機性，求準確
                     ResponseFormat = ChatResponseFormat.CreateJsonObjectFormat() // 🔥 關鍵：強制回傳 JSON
                 });
 
@@ -780,7 +781,7 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
                 // 這裡我們用比較低的 Temperature，讓它穩定發揮
                 ClientResult<ChatCompletion> result = await _chatClient.CompleteChatAsync(messages, new ChatCompletionOptions
                 {
-                    Temperature = 0.3f,
+                    //Temperature = 0.3f,
                     MaxOutputTokenCount = 200
                 });
 
@@ -831,7 +832,7 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
                 // SDK 會自動處理 JSON 序列化、連線、Retry
                 ClientResult<ChatCompletion> result = await _chatClient.CompleteChatAsync(messages, new ChatCompletionOptions
                 {
-                    Temperature = 0.1f,
+                    //Temperature = 0.1f,
                     MaxOutputTokenCount = 4096 // v2.0 正確屬性名稱
                 });
                 ChatCompletion completion = result.Value;
