@@ -782,7 +782,7 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
                 ClientResult<ChatCompletion> result = await _chatClient.CompleteChatAsync(messages, new ChatCompletionOptions
                 {
                     //Temperature = 0.3f,
-                    MaxOutputTokenCount = 200
+                    //MaxCompletionTokens = 200
                 });
 
                 string rewritten = result.Value.Content[0].Text.Trim();
@@ -833,7 +833,7 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
                 ClientResult<ChatCompletion> result = await _chatClient.CompleteChatAsync(messages, new ChatCompletionOptions
                 {
                     //Temperature = 0.1f,
-                    MaxOutputTokenCount = 4096 // v2.0 正確屬性名稱
+                    //MaxOutputTokenCount = 4096 // v2.0 正確屬性名稱
                 });
                 ChatCompletion completion = result.Value;
 
