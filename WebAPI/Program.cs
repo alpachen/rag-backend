@@ -7,6 +7,7 @@ using RagPipeline.Processing;
 using RagDataPipeline.Services;
 using WebAPI.Models;
 
+
 var builder = WebApplication.CreateBuilder(args);
 
 // ============================
@@ -29,7 +30,10 @@ builder.Configuration.AddEnvironmentVariables();
 // ============================
 // Dependency Injection
 // ============================
+builder.Services.AddHttpClient(); // ✅ 讓妳能使用 IHttpClientFactory 或直接注入 HttpClient
 builder.Services.AddControllers();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
 
 builder.Services.AddSingleton<VoyageEmbedder>();
 builder.Services.AddSingleton<QdrantIndexer>();
@@ -40,13 +44,21 @@ builder.Services.AddSingleton<DocumentIndexService>();
 builder.Services.AddSingleton<RagQueryService>();
 
 var app = builder.Build();
+// ✅ 2. 補上 Swagger 的 Middleware（這能幫妳診斷 404）
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
-app.UseCors("AllowAll");
+
 
 // ============================
 // Middleware
 // ============================
 app.UseHttpsRedirection();
+app.UseRouting();
+app.UseCors("AllowAll");
 app.UseAuthorization();
 
 // ============================
@@ -61,40 +73,40 @@ bool IsAdmin(HttpRequest req)
     return key == adminKey;
 }
 
-// ============================
-// 一般使用者：RAG 查詢（已加入 sources）
-// ============================
-app.MapPost("/api/rag/query", async (
-    [FromBody] RagQueryRequest request,
-    RagQueryService ragService) =>
-{
-    try
-    {
-        // AI 回答
-        var answer = await ragService.AskAsync(request.Query);
+//// ============================
+//// 一般使用者：RAG 查詢（已加入 sources）
+//// ============================
+//app.MapPost("/api/rag/query", async (
+//    [FromBody] RagQueryRequest request,
+//    RagQueryService ragService) =>
+//{
+//    try
+//    {
+//        // AI 回答
+//        var answer = await ragService.AskAsync(request.Query);
 
-        // 文件相似度
-        var docs = await ragService.GetTopSourcesAsync(request.Query);
+//        // 文件相似度
+//        var docs = await ragService.GetTopSourcesAsync(request.Query);
 
-        var response = new
-        {
-            answer,
-            sources = docs.Select(d => new
-            {
-                title = d.FileName,
-                snippet = d.PreviewText,
-                score = d.Score,
-                // url = $"https://rag-backend-5jm5.onrender.com/storage/{d.FileName}"
-            })
-        };
+//        var response = new
+//        {
+//            answer,
+//            sources = docs.Select(d => new
+//            {
+//                title = d.FileName,
+//                snippet = d.PreviewText,
+//                score = d.Score,
+//                // url = $"https://rag-backend-5jm5.onrender.com/storage/{d.FileName}"
+//            })
+//        };
 
-        return Results.Ok(response);
-    }
-    catch (Exception ex)
-    {
-        return Results.Problem(ex.Message);
-    }
-});
+//        return Results.Ok(response);
+//    }
+//    catch (Exception ex)
+//    {
+//        return Results.Problem(ex.Message);
+//    }
+//});
 
 // ============================
 // 管理者：列出所有文件

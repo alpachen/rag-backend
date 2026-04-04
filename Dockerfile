@@ -7,6 +7,7 @@ WORKDIR /src
 # 複製 csproj 以利用 docker layer cache（加速 build）
 COPY WebAPI/WebAPI.csproj WebAPI/
 COPY RagDataPipeline/RagDataPipeline.csproj RagDataPipeline/
+COPY Dr.meow/Dr.meow.csproj Dr.meow/
 
 
 # restore（利用 cache → 減少部署時間）

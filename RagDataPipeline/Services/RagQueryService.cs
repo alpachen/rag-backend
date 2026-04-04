@@ -17,6 +17,7 @@ using System.Text.RegularExpressions;
 
 namespace RagPipeline.Services
 {
+
     public class RagResponse
     {
         public string Answer { get; set; } = "";
@@ -96,7 +97,7 @@ namespace RagPipeline.Services
         // ============================================================
         // 🚀 AskAsync（核心流程）
         // ============================================================
-        public async Task<RagResponse> AskAsync(string query, List<ChatMessage> history = null)
+        public async Task<RagResponse> AskAsync(string query, List<ChatMessage> history = null, string mode = "chat")
         {
             query = query.Trim().TrimEnd('？', '?');
             if (string.IsNullOrWhiteSpace(query))
@@ -108,7 +109,18 @@ namespace RagPipeline.Services
             // 1. LLM 查詢重寫 (治根核心)
             //    它會自動處理：縮寫展開(TR->威脅發生機率)、上下文補全、錯字修正
             // ============================================================
-            string refinedQuery = await RewriteQueryAsync(query, history);
+            string refinedQuery;
+
+            if (!string.IsNullOrEmpty(mode) && mode.ToLower().Contains("form"))
+            {
+                Console.WriteLine("✅ 使用 RewriteForFormAsync（填表模式）");
+                refinedQuery = await RewriteForFormAsync(query, mode);
+            }
+            else
+            {
+                Console.WriteLine("⚠️ 使用 RewriteQueryAsync（一般問答）");
+                refinedQuery = await RewriteQueryAsync(query, history);
+            }
 
             // (舊的 Follow-up Detection 區塊已移除，因為 RewriteQueryAsync 已經做完了)
 
@@ -253,6 +265,190 @@ namespace RagPipeline.Services
                 Sources = grouped
             };
 
+        }
+
+        // 在 RagQueryService 類別內加入這個方法
+        public async Task<SmartFormResult> ProcessSmartFormAsync(string query, string mode, List<ChatMessage> history)
+        {
+            // --- 階段 1：改寫機器人 (僅負責把口語變正式技術語句) ---
+            // 範例：「檔名太長會壞掉」 -> 「修正論文上傳功能之檔名長度限制邏輯」
+            string professionalQuery = await RewriteForFormAsync(query, mode);
+
+            // --- 階段 2：檢索與背景分析 (RAG) ---
+            // 目的：檢索四階文件，判斷資安範疇與合規性，不讓 AI 自己在那邊亂分析
+            var embedding = await _embedder.EmbedAsync(professionalQuery);
+            var rawResults = await _indexer.SearchAsync(embedding, 10);
+            string documentContext = string.Join("\n\n", rawResults.Select(r =>
+                r.Payload.TryGetProperty("content", out var c) ? c.ToString() : ""));
+
+            var chatMessages = new List<OpenAI.Chat.ChatMessage>();
+            bool isVulnerability = mode.ToLower() == "vulnerability";
+
+            // --- 階段 3：定義動態 System Prompt ---
+            string promptContent = "";
+
+            // 🚀 【關鍵改進】如果是變更單，直接呼叫核心分析函式，不再進行行政資訊追問
+            if (isVulnerability)
+            {
+                // 1. 呼叫妳最核心的 RAG 分析邏輯 (內含 ISMS 引用與風險判斷)
+                var analysis = await AnalyzeChangeRequestAsync(professionalQuery);
+
+                // 2. 將分析結果 (AnalysisField 巢狀結構) 扁平化，以對應前端 Modal 的 JSON 格式
+                var formData = new
+                {
+                    Title = analysis.SummaryReasoning?.Split('。')[0] ?? "系統變更申請",
+                    Description = professionalQuery,
+                    ScheduledTime = DateTime.Now.AddDays(1).ToString("yyyy-MM-ddTHH:mm"), // 預設明天
+
+                    // 下面這些 Key 必須完全對應妳前端 Modal 的 JS 變數名稱
+                    SystemCategory = analysis.SystemCategory?.Value,
+                    SystemCategoryReasoning = analysis.SystemCategory?.Reasoning, // 新增理由
+
+                    TicketCategory = analysis.TicketCategory?.Value ?? "DevOps",
+                    TicketCategoryReasoning = analysis.TicketCategory?.Reasoning,
+
+                    ChangeType = analysis.ChangeType?.Value,
+                    ChangeTypeReasoning = analysis.ChangeType?.Reasoning, // 新增理由
+
+                    Severity = analysis.Severity?.Value,
+                    SeverityReasoning = analysis.Severity?.Reasoning,
+
+                    ImpactLevel = analysis.ImpactLevel?.Value,
+                    ImpactLevelReasoning = analysis.ImpactLevel?.Reasoning,
+
+                    Dependency = analysis.Dependency?.Value,
+                    DependencyReasoning = analysis.Dependency?.Reasoning,
+
+                    TestPlan = analysis.TestPlan?.Value,
+                    TestPlanReasoning = analysis.TestPlan?.Reasoning,
+
+                    RecoveryPlan = analysis.RecoveryPlan?.Value,
+                    RecoveryPlanReasoning = analysis.RecoveryPlan?.Reasoning,
+
+                    // 💡 強制注入：不再詢問部門分機
+                    RequesterDept = "資訊中心",
+                    Extension = "Internal-Auto"
+                };
+
+                return new SmartFormResult
+                {
+                    // Answer 會顯示在對話框中，告訴使用者分析結果
+                    Answer = $"✅ **資安合規性分析完成**\n\n{analysis.SummaryReasoning}\n\n(已根據 ISMS 規範自動產出風險評估與計畫內容)",
+                    IsComplete = true, // 標記為完成，直接觸發前端彈窗
+                    FormDataJson = System.Text.Json.JsonSerializer.Serialize(formData)
+                };
+            }
+
+            // 1. 先塞入 System Prompt (人格設定與背景資料)
+            chatMessages.Add(new SystemChatMessage($@"
+妳是醫資系統的『自動化提單機器人』。目前的模式是：{mode}。
+妳的任務是將需求轉化為結構化 JSON。
+
+⚠️ 絕對禁令：
+- 禁止進行資安知識教學 (例如分析 CIA、引用程序書條文)。
+- 禁止解釋為什麼這樣改。
+- 不要對使用者說『針對您提出的情境...』之類的廢話。
+- 妳的目標是從【對話歷史】中提取 部門、分機、日期。
+- 妳的目標是根據【正式需求】與【參考規範】補全 Description。
+- 妳必須從輸入的文字中提取【部門、分機、日期】。
+
+範例輸入：『我是資安組的分機888，我的需求是：改論文功能。期望完成日期是：2026-04-10』
+妳應提取：
+RequesterDept: 資安組
+Extension: 888
+ExpectedDate: 2026-04-10
+
+【輸入資料】
+- 正式需求：{professionalQuery}
+- 參考規範：{documentContext}
+
+【欄位清單】(請務必對應這些 Key)：
+1. Title: 專業的需求標題。
+2. RequesterDept: 使用者提供的部門。
+3. Extension: 使用者提供的分機。
+4. Description: 妳根據使用者描述所『補全』後的專業技術內容。
+5. ExpectedDate: 使用者提供的期望日期。
+6. Priority: 根據需求緊急度判斷 (高/中/低)。
+7. IsSecurityScope: 判定是否屬於資訊/資安範疇 (true/false)。
+
+【行為準則】：
+- 範疇檢查：若需求完全無關 IT (如:修飲水機)，只回覆：『此不為本系統之服務範圍。』
+- 資訊不足：若使用者沒給需求細節，請用對話追問，『不要』產出 JSON。
+- 資訊充足：當妳有足夠資訊填滿上述欄位時，『不要』廢話解釋，直接輸出以下格式：
+[USER_REPLY] 這裡寫妳對使用者說的話，例如：已為您整理好申請單，請確認。
+[FORM_JSON] 
+{{
+  ""Title"": ""..."",
+  ""RequesterDept"": ""..."",
+  ""Extension"": ""..."",
+  ""Description"": ""..."",
+  ""ExpectedDate"": ""..."",
+  ""Priority"": ""..."",
+  ""IsSecurityScope"": true
+}}"));
+            // ✅ 2. 重點：塞入對話歷史紀錄 (這會讓 AI 看到前面使用者填的部門和分機)
+            if (history != null)
+            {
+                foreach (var h in history.TakeLast(6)) // 取最近 6 則對話即可
+                {
+                    if (h.Role == "assistant")
+                        chatMessages.Add(new AssistantChatMessage(h.Content));
+                    else
+                        chatMessages.Add(new UserChatMessage(h.Content));
+                }
+            }
+
+            // 3. 塞入最後這句使用者的描述
+            chatMessages.Add(new UserChatMessage(query));
+
+            // 🤖 呼叫 LLM
+            var completion = await _chatClient.CompleteChatAsync(chatMessages);
+            string aiResponse = completion.Value.Content[0].Text;
+            // 📢 --- 這是關鍵 Debug 行 ---
+            Console.WriteLine("=== [AI 原始回覆內容] ===");
+            Console.WriteLine(aiResponse);
+            Console.WriteLine("========================");
+
+            // --- D. 階段四：物理過濾 (維持不變) ---
+            string cleanAnswer = "";
+            string jsonData = "";
+
+            // ✅ 1. 抓取對話 (找 [USER_REPLY] 標籤，找不到就抓第一行)
+            var replyMatch = Regex.Match(aiResponse, @"\[USER_REPLY\]\s*(.*?)\s*(\[FORM_JSON\]|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            if (replyMatch.Success)
+            {
+                cleanAnswer = replyMatch.Groups[1].Value.Trim();
+            }
+            else
+            {
+                // 如果 AI 沒噴標籤，我們抓第一行非空白文字
+                cleanAnswer = aiResponse.Split('\n').FirstOrDefault(line => !string.IsNullOrWhiteSpace(line)) ?? "已為您備妥表單。";
+            }
+
+            // ✅ 2. 抓取 JSON (不管標籤了，直接抓最外層的大括號)
+            // 這個 Regex 會抓取第一個 { 到最後一個 } 之間的內容
+            var jsonMatch = Regex.Match(aiResponse, @"(\{.*\})", RegexOptions.Singleline);
+            if (jsonMatch.Success)
+            {
+                jsonData = jsonMatch.Groups[1].Value.Trim();
+            }
+
+            bool isComplete = !string.IsNullOrEmpty(jsonData);
+
+            return new SmartFormResult
+            {
+                Answer = cleanAnswer,
+                IsComplete = isComplete, // 這裡會變成 JSON 中的 isComplete
+                FormDataJson = jsonData  // 這裡會變成 JSON 中的 formDataJson
+            };
+        }
+
+        // 順便定義一下這個結果模型 (可以放在 RagPipeline.Models)
+        public class SmartFormResult
+        {
+            public string Answer { get; set; } = string.Empty;
+            public bool IsComplete { get; set; } = false;
+            public string FormDataJson { get; set; } = string.Empty;
         }
 
         // ============================================================
@@ -735,6 +931,53 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
 3. **建議結論**
    * 建議將風險等級設定為 **[等級]**，並需填寫 **[表單編號]** 進行審核 [來源: Doc.pdf]。
 ";
+        }
+
+        private async Task<string> RewriteForFormAsync(string query, string mode)
+        {
+            string systemPrompt = @"
+你是「需求轉寫助手」，專門將使用者的口語描述轉為『系統需求描述』。
+
+【你的任務】
+將使用者的句子改寫成「描述問題或需求的陳述句」。
+
+【嚴格規則】
+1. ❌ 禁止變成問句（不能出現：為何、如何、嗎、？）
+2. ❌ 禁止回答問題或提供解法
+3. ❌ 禁止分析原因
+4. ✅ 保留原始語意
+5. ✅ 補齊為「完整需求描述」
+6. ✅ 使用「系統/功能/模組」等技術語言
+7. 長度控制在 15~30 字
+
+【輸出格式】
+只輸出一句話，不要任何解釋
+
+【範例】
+輸入：我要改上傳論文的功能，因為檔名太長會壞掉
+輸出：修正論文上傳功能之檔名長度限制異常問題
+
+輸入：登入很慢
+輸出：優化系統登入流程效能問題
+";
+
+            var result = await CallModelAsync(systemPrompt, query, null);
+
+            // ⭐ 先基本清理
+            string rewritten = result
+                .Replace("改寫：", "")
+                .Replace("輸出：", "")
+                .Trim();
+
+            // ⭐🔥 防呆機制（就放這裡）
+            if (rewritten.Contains("？") || rewritten.Contains("?") ||
+                rewritten.Contains("為何") || rewritten.Contains("如何"))
+            {
+                return query; // fallback 原句
+            }
+
+            return rewritten;
+
         }
 
         // 放在 RagQueryService 類別內
