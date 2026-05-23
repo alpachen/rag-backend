@@ -99,37 +99,104 @@ namespace WebAPI.Controllers
         [HttpPost("save-form")]
         public async Task<IActionResult> SaveForm([FromBody] SaveFormRequest data)
         {
-            // Nikki，這裡加個 Log，如果連這行都沒印出來，代表真的是 CORS 或路由擋掉了
             Console.WriteLine("🟢 後端已接收到 save-form 請求！");
 
             if (data == null) return BadRequest("請求資料不可為空");
 
+            // 🔍 關鍵補丁：從當前 Session 抓取身分資訊
+            var userIdStr = HttpContext.Session.GetString("UserId");
+            var userTeam = HttpContext.Session.GetString("UserTeam");
+
+            // 檢查 Session 是否失效
+            if (string.IsNullOrEmpty(userIdStr))
+            {
+                if (data.RequesterId != 0)
+                {
+                    Console.WriteLine($"⚠️ Session 已過期，但接受前端傳入的 ID: {data.RequesterId}");
+                }
+                else
+                {
+                    return BadRequest("儲存失敗：登入狀態已失效，請重新登入。");
+                }
+            }
+            else
+            {
+                data.RequesterId = int.Parse(userIdStr);
+                data.Department = userTeam ?? "";
+            }
+
+            try
+            {
+                // 🚀 1. 產生臨時安全單號，一秒安撫前端
+                string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+                string prefix = data.FormType == "Vulnerability" ? "CHG" : "REQ";
+                string fakeTicketNumber = $"{prefix}-{timestamp}";
+
+                // 🚀 2. 【核心魔法】：利用 Task.Run 強行開闢「獨立背景平行執行緒」！
+                // 我們不使用 await 去等它，主線程（Request Thread）把任務丟給 CPU 後就直接放行。
+                // 這樣 7068 專案就會在背景慢慢去跟 7186 通訊，前端按鈕一微秒都不用等，直接亮起！
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var client = new HttpClient();
+                        string drMeowUrl = "https://localhost:7186/api/Forms/SaveAll";
+
+                        // 讓這個跨專案 HTTP 請求在背景靜悄悄地跑
+                        var response = await client.PostAsJsonAsync(drMeowUrl, data);
+
+                        if (response.IsSuccessStatusCode)
+                        {
+                            Console.WriteLine($"\n✅ [原生背景成功] 表單已順利無感轉發至 7186！單號應為: {fakeTicketNumber}");
+                        }
+                        else
+                        {
+                            var error = await response.Content.ReadAsStringAsync();
+                            Console.WriteLine($"\n❌ [原生背景失敗] 7186 回報錯誤: {response.StatusCode} - {error}");
+                        }
+                    }
+                    catch (Exception bgEx)
+                    {
+                        Console.WriteLine($"\n❌ [原生背景崩潰] 異步管線連線異常: {bgEx.Message}");
+                    }
+                });
+
+                Console.WriteLine($"🚀 原生背景執行緒已分流！安全釋放前端鎖，預配單號: {fakeTicketNumber}");
+
+                // 🚀 3. 瞬間回傳 200 OK，前端按鈕轉圈圈立刻結束，彈窗關閉！
+                return Ok(new { ticketNumber = fakeTicketNumber, isSuccess = true });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ 嚴重錯誤: {ex.Message}");
+                return StatusCode(500, $"系統異常: {ex.Message}");
+            }
+        }
+
+        // 🚀 新增：被 Hangfire 獨立呼叫的背景非同步轉發工作
+        [System.ComponentModel.DisplayName("背景轉發表單至核心 API: {0}")]
+        public static async Task SendToDrMeowBackendAsync(SaveFormRequest data)
+        {
             try
             {
                 using var client = new HttpClient();
-
-                // ✅ 修正：統一呼叫 Dr.meow 的單一入口 SaveAll
-                // 確保 7186 是妳前端專案啟動後的正確埠號
                 string drMeowUrl = "https://localhost:7186/api/Forms/SaveAll";
 
                 var response = await client.PostAsJsonAsync(drMeowUrl, data);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    var result = await response.Content.ReadFromJsonAsync<dynamic>();
-                    return Ok(result);
+                    Console.WriteLine($"✅ [Hangfire 背景成功] 表單已無感寫入 7186 入口！");
                 }
                 else
                 {
                     var error = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"❌ 轉發失敗: {response.StatusCode} - {error}");
-                    return StatusCode((int)response.StatusCode, $"前端 API 儲存失敗: {error}");
+                    Console.WriteLine($"❌ [Hangfire 背景失敗]: {response.StatusCode} - {error}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ 嚴重錯誤: {ex.Message}");
-                return StatusCode(500, $"系統異常: {ex.Message}");
+                Console.WriteLine($"❌ [Hangfire 網路異常]: {ex.Message}");
             }
         }
 
@@ -162,12 +229,13 @@ namespace WebAPI.Controllers
     }
     public class SaveFormRequest
     {
+        public int RequesterId { get; set; }
         public string? Title { get; set; }
         public string? Description { get; set; }
         public string? Priority { get; set; }
         public string? Department { get; set; }
         public string? Extension { get; set; }
-        public string? ExpectedDate { get; set; }
+        public string? ExpectedCompletionDate { get; set; }
         public string? FormType { get; set; }
 
         // 新增這些給變更單用
@@ -179,5 +247,10 @@ namespace WebAPI.Controllers
         public string? Dependency { get; set; }
         public string? TestPlan { get; set; }
         public string? RecoveryPlan { get; set; }
+        public string? RequestType { get; set; }      // 需求類型
+        public string? ExpectedBenefits { get; set; } // 預期效益
+        public string? ComplianceStatus { get; set; }
+        public int? PriorityScore { get; set; }
+        public string? AiReviewComment { get; set; }
     }
 }

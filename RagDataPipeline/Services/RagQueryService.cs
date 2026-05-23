@@ -270,9 +270,25 @@ namespace RagPipeline.Services
         // 在 RagQueryService 類別內加入這個方法
         public async Task<SmartFormResult> ProcessSmartFormAsync(string query, string mode, List<ChatMessage> history)
         {
+            bool isVulnerability = mode.ToLower() == "vulnerability";
+            // 🚀 變更單終極防汙染定錨：變更單屬於獨立技術審查，不需要參考過去的需求單對話歷史
+            if (isVulnerability)
+            {
+                history = null; // 物理斷開過去的歷史，讓每一次分析都是絕對純淨的第一次
+            }
             // --- 階段 1：改寫機器人 (僅負責把口語變正式技術語句) ---
             // 範例：「檔名太長會壞掉」 -> 「修正論文上傳功能之檔名長度限制邏輯」
-            string professionalQuery = await RewriteForFormAsync(query, mode);
+            string professionalQuery;
+            if (isVulnerability)
+            {
+                professionalQuery = query; // 變更單：直接定錨，100% 壓縮隨機性
+            }
+            else
+            {
+                professionalQuery = await RewriteForFormAsync(query, mode); // 需求單：才需要改寫
+            }
+
+            Console.WriteLine($"🎯 [核心分析輸入]：{professionalQuery}");
 
             // --- 階段 2：檢索與背景分析 (RAG) ---
             // 目的：檢索四階文件，判斷資安範疇與合規性，不讓 AI 自己在那邊亂分析
@@ -282,10 +298,10 @@ namespace RagPipeline.Services
                 r.Payload.TryGetProperty("content", out var c) ? c.ToString() : ""));
 
             var chatMessages = new List<OpenAI.Chat.ChatMessage>();
-            bool isVulnerability = mode.ToLower() == "vulnerability";
 
             // --- 階段 3：定義動態 System Prompt ---
             string promptContent = "";
+
 
             // 🚀 【關鍵改進】如果是變更單，直接呼叫核心分析函式，不再進行行政資訊追問
             if (isVulnerability)
@@ -327,15 +343,20 @@ namespace RagPipeline.Services
 
                     // 💡 強制注入：不再詢問部門分機
                     RequesterDept = "資訊中心",
-                    Extension = "Internal-Auto"
+                    Extension = "Internal-Auto",
+                    ComplianceStatus = analysis.ComplianceStatus, // 確保 AI 分析結果被塞進去
+                    PriorityScore = analysis.PriorityScore,
+                    AiReviewComment = analysis.SummaryReasoning // 這是你要顯示在卡片上的
                 };
+
 
                 return new SmartFormResult
                 {
                     // Answer 會顯示在對話框中，告訴使用者分析結果
                     Answer = $"✅ **資安合規性分析完成**\n\n{analysis.SummaryReasoning}\n\n(已根據 ISMS 規範自動產出風險評估與計畫內容)",
                     IsComplete = true, // 標記為完成，直接觸發前端彈窗
-                    FormDataJson = System.Text.Json.JsonSerializer.Serialize(formData)
+                    FormDataJson = System.Text.Json.JsonSerializer.Serialize(formData),
+                    AnalysisData = analysis
                 };
             }
 
@@ -343,6 +364,13 @@ namespace RagPipeline.Services
             chatMessages.Add(new SystemChatMessage($@"
 妳是醫資系統的『自動化提單機器人』。目前的模式是：{mode}。
 妳的任務是將需求轉化為結構化 JSON。
+【核心任務】
+1. 提取基本資訊：部門、分機、期望完成日期。
+2. 💡 執行「需求評估分析」：
+   - 系統類別：判斷這屬於哪一個醫療資訊系統（如：HIS, 檢驗, 報表）。
+   - 需求類型：判斷是「功能新增」、「Bug修正」還是「系統優化」。
+   - 優先等級：根據需求描述判斷緊急程度 (高/中/低)。
+   - 預期效益：根據需求推論出實施後的好處（例如：提升行政效率、減少人工作業時間）。
 
 ⚠️ 絕對禁令：
 - 禁止進行資安知識教學 (例如分析 CIA、引用程序書條文)。
@@ -356,7 +384,7 @@ namespace RagPipeline.Services
 妳應提取：
 RequesterDept: 資安組
 Extension: 888
-ExpectedDate: 2026-04-10
+ExpectedCompletionDate: 2026-04-10
 
 【輸入資料】
 - 正式需求：{professionalQuery}
@@ -366,10 +394,13 @@ ExpectedDate: 2026-04-10
 1. Title: 專業的需求標題。
 2. RequesterDept: 使用者提供的部門。
 3. Extension: 使用者提供的分機。
-4. Description: 妳根據使用者描述所『補全』後的專業技術內容。
-5. ExpectedDate: 使用者提供的期望日期。
+4. Description: 妳根據使用者描述所『整理』後的內容。請注意：使用白話文補全，讓非技術背景的主管也能一眼看懂問題點，禁止使用工程師術語。
+5. ExpectedCompletionDate: 使用者提供的期望日期。
 6. Priority: 根據需求緊急度判斷 (高/中/低)。
 7. IsSecurityScope: 判定是否屬於資訊/資安範疇 (true/false)。
+8. SystemCategory: 系統類別。
+9. RequestType: 需求類型。
+10. ExpectedBenefits: 預期效益說明。
 
 【行為準則】：
 - 範疇檢查：若需求完全無關 IT (如:修飲水機)，只回覆：『此不為本系統之服務範圍。』
@@ -379,22 +410,43 @@ ExpectedDate: 2026-04-10
 [FORM_JSON] 
 {{
   ""Title"": ""..."",
-  ""RequesterDept"": ""..."",
+  ""Department"": ""..."",
   ""Extension"": ""..."",
   ""Description"": ""..."",
-  ""ExpectedDate"": ""..."",
+  ""ExpectedCompletionDate"": ""..."",
   ""Priority"": ""..."",
-  ""IsSecurityScope"": true
+  ""SystemCategory"": ""..."",
+  ""RequestType"": ""..."",
+  ""ExpectedBenefits"": ""...""
 }}"));
             // ✅ 2. 重點：塞入對話歷史紀錄 (這會讓 AI 看到前面使用者填的部門和分機)
+            // 🚀 修正版：歷史紀錄數據清洗，徹底消滅大括號反芻現象
             if (history != null)
             {
-                foreach (var h in history.TakeLast(6)) // 取最近 6 則對話即可
+                foreach (var h in history.TakeLast(6))
                 {
+                    string cleanedContent = h.Content;
+
                     if (h.Role == "assistant")
-                        chatMessages.Add(new AssistantChatMessage(h.Content));
+                    {
+                        // 🎯 魔法 Regex：只要看到 [FORM_JSON] 及其後面的所有大括號內容，一律抹除
+                        // 這樣 AI 的對話歷史中，就只會留下白話文的 Answer，不會留下舊的 JSON 髒資料！
+                        cleanedContent = Regex.Replace(cleanedContent, @"\[FORM_JSON\].*?(\{.*?\})", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                        // 防呆：如果 AI 沒乖乖打標籤，但內容有 ```json ... ```，也一併洗掉
+                        cleanedContent = Regex.Replace(cleanedContent, @"```json.*?```", "", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+                        cleanedContent = cleanedContent.Trim();
+
+                        // 如果洗完之後變成空字串，就不要塞進歷史紀錄，避免干擾 AI
+                        if (string.IsNullOrWhiteSpace(cleanedContent)) continue;
+
+                        chatMessages.Add(new AssistantChatMessage(cleanedContent));
+                    }
                     else
-                        chatMessages.Add(new UserChatMessage(h.Content));
+                    {
+                        chatMessages.Add(new UserChatMessage(cleanedContent));
+                    }
                 }
             }
 
@@ -449,6 +501,9 @@ ExpectedDate: 2026-04-10
             public string Answer { get; set; } = string.Empty;
             public bool IsComplete { get; set; } = false;
             public string FormDataJson { get; set; } = string.Empty;
+
+            // 🔥 新增這一行：讓 Controller 可以從這裡拿到分析結果
+            public dynamic AnalysisData { get; set; }
         }
 
         // ============================================================
@@ -699,8 +754,10 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
 
             // 2. 定義 System Prompt (加入 RAG 內容與引用要求)
             var systemPrompt = $@"
-你是一名資安變更管理的 AI 顧問。
-你的任務是根據使用者提供的『變更內容描述』以及下方提供的 **[ISMS 參考資料]**，進行分析，並輸出結構化的巢狀 JSON。
+你是一名專業的醫資系統資安長（CISO）。
+你的任務是根據使用者提供的『變更內容描述』以及下方提供的 **[ISMS 參考資料]**，執行兩項核心工作：
+一、將內容轉化為結構化的 JSON 填寫表單。
+二、提供主管級的資安風險分析建議。
 
 ========================
 【ISMS 參考資料】
@@ -737,6 +794,20 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
      - 未出現在 ISMS 參考資料中的 ISMS 條號
    - 若無來源，請誠實標註「無適用 ISMS 條文可引用」
 
+---
+
+### 🎨 【關鍵排版指令：結構化 Markdown 輸出】
+在 `summaryReasoning` 欄位中，請將分析結果以結構化 Markdown 呈現，確保主管審核時能快速捕捉重點：
+
+1. **核心觀點 (Executive Summary)**：使用 `**粗體**`，用一句話總結此變更的資安風險層級。
+2. **執行關鍵路徑 (Execution Roadmap)**：使用條列式 (`*`)，將「執行建議」拆分為 3-5 個具體、可執行的操作步驟。
+3. **合規引用 (Compliance References)**：將所有引用來源抽離至區塊底部，格式如下：
+   * 引用來源：`[來源名稱 - 頁碼 X]`
+
+（請注意：在 JSON 字串中，請使用 `\n` 來進行換行）
+
+---
+
 ### 欄位定義與限定詞彙清單：
 （以下表格內容維持不變）
 
@@ -751,23 +822,26 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
 | testPlan | 完整測試, 部分測試, 無測試 | 完整測試: 含單元、整合、業務流程模擬；部分測試: 僅驗證主要功能；無測試: 直接上線。 |
 | recoveryPlan | 快速回復, 有限回復, 無回復方案 | 快速回復: 有明確步驟，且回復時間短(15分鐘內可恢復)；有限回復: 需長時間或大量人工處理；無回復方案: 一旦失敗無法復原。 |
 
+### 🚀 決策分析要求 (SummaryReasoning)：
+請在 summaryReasoning 欄位中，以資安主管的角度詳細分析：
+1. **風險總評**：引用參考資料，分析此變更對 HIS/Infra 的具體風險。
+2. **合規性連結**：明確指出依據哪份文件的哪個章節。
+3. **執行建議**：針對測試計畫與復原計畫，給予具體的執行指導 (例如：需確認資料庫還原演練紀錄、建議於離峰時間執行)。
+
 ### 輸出 JSON 結構（AnalysisField 巢狀）：
 ```json
 {{
-  ""systemCategory"": {{
-    ""value"": ""限定詞彙"",
-    ""description"": ""合規描述"",
-    ""reasoning"": ""判斷理由，並引用 [來源 X - 檔名 頁碼] 或標示無可引用條文"",
-    ""detail"": """"
-  }},
-  ""ticketCategory"": {{ }},
-  ""changeType"": {{ }},
-  ""severity"": {{ }},
-  ""impactLevel"": {{ }},
-  ""dependency"": {{ }},
-  ""testPlan"": {{ }},
-  ""recoveryPlan"": {{ }},
-  ""summaryReasoning"": ""整體風險與合規性總結，僅可引用上述 ISMS 參考資料中的來源""
+  ""systemCategory"": {{ ""value"": ""限定詞彙"", ""description"": ""合規描述"", ""reasoning"": ""引用來源或標示無適用"" }},
+  ""ticketCategory"": {{ ""value"": ""..."", ""description"": ""..."", ""reasoning"": ""..."" }},
+  ""changeType"": {{ ""value"": ""..."", ""description"": ""..."", ""reasoning"": ""..."" }},
+  ""severity"": {{ ""value"": ""..."", ""description"": ""..."", ""reasoning"": ""..."" }},
+  ""impactLevel"": {{ ""value"": ""..."", ""description"": ""..."", ""reasoning"": ""..."" }},
+  ""dependency"": {{ ""value"": ""..."", ""description"": ""..."", ""reasoning"": ""..."" }},
+  ""testPlan"": {{ ""value"": ""..."", ""description"": ""..."", ""reasoning"": ""..."" }},
+  ""recoveryPlan"": {{ ""value"": ""..."", ""description"": ""..."", ""reasoning"": ""..."" }},
+  ""summaryReasoning"": ""【整體分析】：使用上述 Markdown 格式撰寫分析建議。"",
+  ""complianceStatus"": ""Pass/Review/Fail"",
+  ""priorityScore"": 80
 }}
 ";
 
@@ -936,29 +1010,25 @@ Other: 其他未分類系統，AI 必須在 detail 欄位中說明是哪種其�
         private async Task<string> RewriteForFormAsync(string query, string mode)
         {
             string systemPrompt = @"
-你是「需求轉寫助手」，專門將使用者的口語描述轉為『系統需求描述』。
+妳現在的角色是「語意補全專員」。
+使用者的輸入通常很簡短或過於口語，妳的任務是將其整理成「通順、詳細且具備完整主謂賓結構」的內容，但要避免使用過於深奧的資訊技術術語。
 
-【你的任務】
-將使用者的句子改寫成「描述問題或需求的陳述句」。
-
-【嚴格規則】
-1. ❌ 禁止變成問句（不能出現：為何、如何、嗎、？）
-2. ❌ 禁止回答問題或提供解法
-3. ❌ 禁止分析原因
-4. ✅ 保留原始語意
-5. ✅ 補齊為「完整需求描述」
-6. ✅ 使用「系統/功能/模組」等技術語言
-7. 長度控制在 15~30 字
-
-【輸出格式】
-只輸出一句話，不要任何解釋
+【改寫原則】
+1. ❌ 禁止腦補技術細節：不要提到任何資料庫、API、伺服器、程式語言等專業名詞。
+2. ❌ 禁止改變語氣：不要把內容變得太硬板，保持像是一個「在解釋問題的人」。
+3. ✅ 補全背景：如果使用者說『東西壞了』，妳要根據上下文補全成『在執行某項操作時，功能發生異常無法使用』。
+4. ✅ 淺層解釋：當使用者用到生澀的簡稱或術語，妳要用最淺白的白話文解釋它。
+5. ✅ 維持初衷：保留使用者的原始意思，只是把它講得更清楚、更像一份正式報告。
 
 【範例】
-輸入：我要改上傳論文的功能，因為檔名太長會壞掉
-輸出：修正論文上傳功能之檔名長度限制異常問題
+輸入：改那個論文上傳，檔名太長會噴錯
+輸出：調整論文上傳功能，解決因為檔案名稱字數過多而導致系統顯示錯誤的問題
+
+輸入：TR 是什麼
+輸出：關於資安風險評估中，用來衡量『威脅發生機率』的 TR 指標定義
 
 輸入：登入很慢
-輸出：優化系統登入流程效能問題
+輸出：反應系統在登入過程中等待時間過長，希望優化操作流暢度
 ";
 
             var result = await CallModelAsync(systemPrompt, query, null);

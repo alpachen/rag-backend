@@ -9,6 +9,9 @@ namespace RagPipeline.Models
         public string Description { get; set; } // 該選項的合規描述 (例如: "涉及跨部門多系統...")
         public string Reasoning { get; set; } // AI 判斷該選項的理由
         public string? Detail { get; set; } // 僅用於 SystemCategory, 填寫 "Other" 時的具體說明
+
+        [JsonPropertyName("confidenceScore")]
+        public double ConfidenceScore { get; set; } // 新增：AI 對此建議的信心程度
     }
 
     public class ChangeRequestAnalysisResult
@@ -42,6 +45,12 @@ namespace RagPipeline.Models
 
         [JsonPropertyName("rawJson")]
         public string? RawJson { get; set; }
+
+        [JsonPropertyName("complianceStatus")]
+        public string ComplianceStatus { get; set; } = "Pending"; // 新增：合規狀態 (Pass/Fail/Review)
+
+        [JsonPropertyName("priorityScore")]
+        public int PriorityScore { get; set; } // 新增：綜合風險分數 (0-100)
     }
 
     // AnalyzeRequest 保持不變

@@ -9,7 +9,14 @@ using WebAPI.Models;
 
 
 var builder = WebApplication.CreateBuilder(args);
-
+builder.Services.AddDistributedMemoryCache();
+// 必須補上這段，否則 app.Run() 時會解析不到 IDataProtectionProvider
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout = TimeSpan.FromMinutes(30); // Session 有效期
+    options.Cookie.HttpOnly = true;               // 安全設定
+    options.Cookie.IsEssential = true;            // 必要 Cookie
+});
 // ============================
 // CORS（前端才能呼叫 API）
 // ============================
@@ -197,7 +204,7 @@ app.MapPost("/api/admin/reindex-one/{filename}", async (
 // 🔥 Health Check（給 Render / UptimeRobot 用）
 // ============================
 app.MapMethods("/", new[] { "GET", "HEAD" }, () => "Dr.meow SecurityRAG API is running! 🚀");
-
+app.UseSession();
 
 // ============================
 app.MapControllers();
